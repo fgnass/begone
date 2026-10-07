@@ -65,6 +65,11 @@
             <span class="hint">Drop an image here, paste it, or</span>
             <span class="primary">Choose image</span>
           </label>
+          <p class="about-line">
+            Runs on your device · Free &amp; open source ·
+            <button id="about-open" type="button" class="link">About</button> ·
+            <a class="link" href="https://github.com/fgnass/begone" target="_blank" rel="noopener">GitHub</a>
+          </p>
 
           <figure id="frame" class="frame" hidden>
             <div id="viewport">
@@ -128,6 +133,30 @@
         </div>
       </footer>
     </div>
+    <dialog id="about" aria-labelledby="about-title">
+      <div class="about-card">
+        <form method="dialog">
+          <button class="icon" aria-label="Close" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </form>
+        <h2 id="about-title" data-lettering>background begone!</h2>
+        <p><strong>begone</strong> removes the background from your images, right in your browser.</p>
+        <p>
+          Your images never leave your device: there is no upload, no account and no tracking. After the first visit,
+          the app also works offline, and you can install it from your browser.
+        </p>
+        <p>On a plain background, begone also keeps the real shadow of the object. Use the brushes to fix the result by hand.</p>
+        <p>
+          The cut-out is done by <a class="link" href="https://github.com/ZhengPeng7/BiRefNet" target="_blank" rel="noopener">BiRefNet</a>
+          (MIT license), a segmentation model that runs on your GPU where possible.
+        </p>
+        <p>
+          Made by <a class="link" href="https://gnass.buzz/projects" target="_blank" rel="noopener">Felix Gnass</a>.
+          Free and open source (MIT) on <a class="link" href="https://github.com/fgnass/begone" target="_blank" rel="noopener">GitHub</a>.
+        </p>
+      </div>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

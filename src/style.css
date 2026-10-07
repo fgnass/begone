@@ -543,6 +543,90 @@ body:not(.empty) #drop {
   }
 }
 
+/* About: a line under the drop area, and a dialog. Only on the start screen. */
+
+.about-line {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+body:not(.empty) .about-line {
+  display: none;
+}
+
+.link {
+  display: inline;
+  height: auto;
+  padding: 0;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--dash);
+  text-underline-offset: 3px;
+}
+
+.link:hover {
+  background: none;
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#about {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 12px 40px var(--shadow);
+}
+
+#about::backdrop {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.about-card {
+  position: relative;
+  padding: 24px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.about-card form {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.about-card h2 {
+  margin: 4px 40px 12px 0;
+  font-size: clamp(22px, 6.5vw, 30px);
+  font-weight: normal;
+}
+
+.about-card p {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.about-card p:last-child {
+  margin-bottom: 0;
+}
+
+.about-card strong {
+  color: var(--text);
+}
+
 /* Tools panel at the bottom. It appears with the first image and then stays,
    also while the image is processed again. It keeps its space while hidden,
    so the image does not jump when it appears. */

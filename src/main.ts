@@ -483,6 +483,14 @@ eraseButton.addEventListener('click', () => toggleBrush('erase'));
 undoButton.addEventListener('click', () => brush.undo());
 brushSize.addEventListener('input', () => brush.setSize(Number(brushSize.value)));
 
+// About dialog. A click outside the card closes it.
+
+const about = $<HTMLDialogElement>('#about');
+$('#about-open').addEventListener('click', () => about.showModal());
+about.addEventListener('click', (e) => {
+  if (e.target === about) about.close();
+});
+
 window.addEventListener('keydown', (e) => {
   if (!editor.hasResult) return;
   if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
