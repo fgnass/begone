@@ -1,0 +1,726 @@
+:root {
+  --accent: #ff3ea5;
+  --on-accent: #ffffff;
+  --canvas: #f5f5f5;
+  --dot: #d6d6d6;
+  --surface: #ffffff;
+  --border: #e4e4e4;
+  --text: #111111;
+  --muted: #666666;
+  --dash: #bdbdbd;
+  --hover: #f0f0f0;
+  --pressed: #e6e6e6;
+  --shadow: rgba(0, 0, 0, 0.08);
+  /* The patterns are tiny SVG tiles. CSS gradients repeated over the whole
+     window took the GPU ~60 ms per frame to redraw, and the panels flickered
+     when the theme changed. */
+  --canvas-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Ccircle cx='10' cy='10' r='1' fill='%23d6d6d6'/%3E%3C/svg%3E");
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --canvas: #1e1e1e;
+  --dot: #363636;
+  --surface: #2c2c2c;
+  --border: #3d3d3d;
+  --text: #f2f2f2;
+  --muted: #a3a3a3;
+  --dash: #5c5c5c;
+  --hover: #383838;
+  --pressed: #474747;
+  --shadow: rgba(0, 0, 0, 0.35);
+  --canvas-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Ccircle cx='10' cy='10' r='1' fill='%23363636'/%3E%3C/svg%3E");
+  color-scheme: dark;
+}
+
+:root[data-theme='checker'] {
+  --canvas-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' shape-rendering='crispEdges'%3E%3Crect width='20' height='20' fill='%23fff'/%3E%3Cpath d='M0 0h10v10H0zM10 10h10v10H10z' fill='%23e3e3e3'/%3E%3C/svg%3E");
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--canvas-image) 0 0 / 20px 20px, var(--canvas);
+  color: var(--text);
+  font: 14px/1.5 system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Toolbar */
+
+header {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px var(--shadow);
+  will-change: transform;
+}
+
+.sep {
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+.themes {
+  display: flex;
+  gap: 2px;
+}
+
+button,
+.primary {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: 500 14px system-ui, sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+button.icon {
+  width: 40px;
+}
+
+button.text {
+  padding: 0 12px;
+}
+
+@media (hover: hover) {
+  button:hover {
+    background: var(--hover);
+  }
+}
+
+button[aria-pressed='true'] {
+  background: var(--pressed);
+}
+
+button:focus-visible,
+.primary:focus-visible,
+.frame:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.primary {
+  padding: 0 14px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.primary:hover {
+  filter: brightness(1.06);
+}
+
+.primary[aria-disabled='true'] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+button:disabled,
+input:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+
+#brush-size {
+  width: 96px;
+  margin: 0 6px;
+  accent-color: var(--accent);
+}
+
+/* Stage */
+
+#stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px 16px;
+  min-height: 0;
+}
+
+.frame-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.frame-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.done #name,
+.working #name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: min(520px, calc(100vw - 32px));
+  min-height: 360px;
+  padding: 40px 24px;
+  border: 1.5px dashed var(--dash);
+  border-radius: 4px;
+  background: var(--surface);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+body:not(.empty) #drop {
+  display: none;
+}
+
+#drop:hover,
+.dragging #drop {
+  border-color: var(--accent);
+}
+
+.tagline {
+  font-size: clamp(28px, 7vw, 40px);
+  margin: 8px 0 4px;
+}
+
+/* Handwritten text, as inline SVG (see scripts/lettering.ts). The font size
+   of the parent sets its size. */
+.lettering {
+  display: block;
+  width: auto;
+  stroke: none;
+}
+
+.hint {
+  margin-top: -8px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+#drop .primary {
+  height: 44px;
+  padding: 0 22px;
+  font-size: 15px;
+}
+
+#frame {
+  position: relative;
+  display: grid;
+  margin: 0;
+  outline: 1.5px solid var(--accent);
+}
+
+.dragging #frame {
+  outline-style: dashed;
+}
+
+#frame img,
+#sizer {
+  grid-area: 1 / 1;
+  display: block;
+  max-width: min(960px, calc(100vw - 32px));
+  max-height: calc(100vh - 220px);
+  max-height: calc(100dvh - 220px);
+  object-fit: contain;
+}
+
+/* Without a crop, the images size the frame and the overlays use the frame
+   as their box. */
+#viewport,
+#view {
+  display: contents;
+}
+
+#sizer {
+  visibility: hidden;
+}
+
+#frame:not(.cropped) #sizer {
+  display: none;
+}
+
+/* With a crop, the sizer has the size of the crop and sizes the frame. The
+   view holds the full image and is moved, so that only the crop shows. */
+#frame.cropped #viewport {
+  display: block;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+#frame.cropped #view {
+  display: block;
+  position: absolute;
+}
+
+#frame.cropped img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+
+.working #original {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+}
+
+.done #original {
+  visibility: hidden;
+}
+
+.done.compare #original {
+  visibility: visible;
+}
+
+.done.compare #result {
+  visibility: hidden;
+}
+
+.handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #ffffff;
+  border: 1.5px solid var(--accent);
+}
+
+.tl {
+  left: -4px;
+  top: -4px;
+}
+
+.tr {
+  right: -4px;
+  top: -4px;
+}
+
+.bl {
+  left: -4px;
+  bottom: -4px;
+}
+
+.br {
+  right: -4px;
+  bottom: -4px;
+}
+
+/* Brush */
+
+#paint {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.5;
+  cursor: none;
+  touch-action: none;
+}
+
+#brush-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  border: 1.5px solid #ffffff;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+/* Status inside the frame while working: a pink wave runs through the dot
+   grid, and a card in the style of the toolbar says what happens. */
+
+#status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+}
+
+/* The dots sit exactly on the page's dot grid (fixed to the viewport like the
+   body background). A ring-shaped mask grows from the centre. */
+#status .wave {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, var(--accent) 1.6px, transparent 1.9px) 0 0 / 20px 20px fixed;
+  mask: radial-gradient(circle, transparent 30%, #000 42%, #000 46%, transparent 58%) center / 0% 0% no-repeat;
+  animation: wave 2.2s cubic-bezier(0.3, 0, 0.2, 1) infinite;
+}
+
+@keyframes wave {
+  to {
+    mask-size: 320% 320%;
+  }
+}
+
+.status-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 24px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px var(--shadow);
+  white-space: nowrap;
+}
+
+.status-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+}
+
+.status-title .mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--accent);
+  animation: mark 1.6s cubic-bezier(0.6, 0, 0.3, 1) infinite;
+}
+
+@keyframes mark {
+  0%,
+  15% {
+    transform: rotate(0deg) scale(1);
+  }
+  45%,
+  60% {
+    transform: rotate(90deg) scale(0.7);
+  }
+  90%,
+  100% {
+    transform: rotate(180deg) scale(1);
+  }
+}
+
+.status-title .oops,
+#status.error .status-title .busy,
+#status.error .wave {
+  display: none;
+}
+
+#status.error .status-title .oops {
+  display: inline;
+}
+
+#status.error .mark {
+  animation: none;
+}
+
+#status .label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+#status.error .label {
+  color: var(--text);
+  white-space: normal;
+  max-width: 320px;
+}
+
+#retry {
+  margin-top: 8px;
+}
+
+/* Only the model download has a known progress. */
+.bar {
+  width: 100%;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.indeterminate .bar,
+#status.error .bar {
+  display: none;
+}
+
+.fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #status .wave {
+    animation: none;
+    mask: none;
+    opacity: 0.25;
+  }
+  .status-title .mark {
+    animation: none;
+  }
+}
+
+/* Tools panel at the bottom. It appears with the first image and then stays,
+   also while the image is processed again. It keeps its space while hidden,
+   so the image does not jump when it appears. */
+
+footer {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px 16px;
+}
+
+body.empty .panel {
+  visibility: hidden;
+}
+
+.panel button.text {
+  padding: 0 12px;
+}
+
+/* Options that stay on or off show a switch, so that they do not look like
+   actions. The switch shows the state, so the button gets no pressed
+   background. */
+
+button.toggle[aria-pressed='true'] {
+  background: transparent;
+}
+
+@media (hover: hover) {
+  button.toggle:hover {
+    background: var(--hover);
+  }
+}
+
+.switch {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 16px;
+  margin-left: 2px;
+  border-radius: 8px;
+  background: var(--dash);
+  transition: background 0.15s;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s;
+}
+
+button.toggle[aria-pressed='true'] .switch {
+  background: var(--accent);
+}
+
+button.toggle[aria-pressed='true'] .switch::after {
+  transform: translateX(10px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch,
+  .switch::after {
+    transition: none;
+  }
+}
+
+/* Copy feedback */
+
+#copy .ok,
+#copy.copied .idle {
+  display: none;
+}
+
+#copy.copied .ok {
+  display: block;
+  color: var(--accent);
+}
+
+/* Hint about holes, and the marks on the image */
+
+.hint-card {
+  position: absolute;
+  flex-wrap: wrap;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(600px, calc(100vw - 32px));
+  padding: 8px 8px 8px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+  will-change: transform;
+}
+
+.hint-card strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.hint-card > span {
+  flex: 1 1 260px;
+}
+
+.hint-card button.text {
+  flex: none;
+  white-space: nowrap;
+  padding: 0 12px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.hole-mark {
+  position: absolute;
+  border-radius: 4px;
+  outline: 1.5px dashed var(--accent);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  pointer-events: none;
+  display: none;
+}
+
+/* Marks without an explanation only confuse, e.g. after a real hole was
+   filled and then undone. So show them only with the hint card or while the
+   Restore brush is active. */
+body:has(#hint:not([hidden])) .hole-mark,
+body:has(#restore[aria-pressed='true']) .hole-mark {
+  display: block;
+}
+
+.compare .hole-mark {
+  display: none !important;
+}
+
+@media (max-width: 560px) {
+  .toolbar .label,
+  .toolbar .switch,
+  header .sep {
+    display: none;
+  }
+  /* No room for the switch: an accent icon with a dot shows "on". */
+  button.toggle {
+    position: relative;
+  }
+  button.toggle[aria-pressed='true'] {
+    color: var(--accent);
+  }
+  button.toggle[aria-pressed='true']::after {
+    content: '';
+    position: absolute;
+    bottom: 3px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .toolbar {
+    gap: 2px;
+  }
+  .toolbar button.icon,
+  .toolbar button.text {
+    width: 36px;
+    padding: 0;
+  }
+  .toolbar .primary {
+    width: 44px;
+    padding: 0;
+  }
+}
