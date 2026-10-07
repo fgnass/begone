@@ -115,6 +115,8 @@ function updateControls() {
   if (editor.canExport && exportUrl) download.href = exportUrl;
   else download.removeAttribute('href');
   shadowButton.disabled = cropButton.disabled = editor.phase === 'working';
+  if (editor.phase !== 'updating') busyOption = undefined;
+  for (const button of [shadowButton, cropButton]) button.setAttribute('aria-busy', String(button === busyOption));
   updateBrushButtons();
 }
 
@@ -242,6 +244,8 @@ async function processImage() {
       finishObsolete(request);
       return;
     }
+    // Read synchronously with the strokes, so that both match.
+    const edit = brushEdit;
     const strokes = await brush.edits();
     edits = strokes.bitmap;
     if (!editor.isCurrent(request)) {
@@ -253,7 +257,7 @@ async function processImage() {
     request.strokes = strokes.count;
     if (!request.quiet) dims.textContent = `${bitmap.width} × ${bitmap.height}`;
     const transfer = edits ? [bitmap, edits] : [bitmap];
-    if (!worker.send({ type: 'process', id: request.id, image: request.image, bitmap, shadow, crop, edits }, transfer)) {
+    if (!worker.send({ type: 'process', id: request.id, image: request.image, edit, bitmap, shadow, crop, edits }, transfer)) {
       bitmap.close();
       edits?.close();
     }
@@ -360,6 +364,9 @@ $('#hint-restore').addEventListener('click', () => {
 
 // Shadow option. The setting is kept, and a change applies to the current image.
 
+// The option whose change is being applied. It shows that it is busy.
+let busyOption: HTMLButtonElement | undefined;
+
 let keepShadow = true;
 try {
   keepShadow = localStorage.getItem('bg-shadow') !== 'off';
@@ -376,7 +383,10 @@ shadowButton.addEventListener('click', () => {
   } catch {
     // Storage not available
   }
-  if (editor.file) applyEdits();
+  if (editor.file) {
+    busyOption = shadowButton;
+    applyEdits();
+  }
 });
 
 // Crop option: shows and exports only the visible pixels. The bounds come
@@ -415,15 +425,25 @@ cropButton.addEventListener('click', () => {
     // Storage not available
   }
   showCrop();
-  if (editor.file) applyEdits();
+  if (editor.file) {
+    busyOption = cropButton;
+    applyEdits();
+  }
 });
 
 // Brush to fix the mask by hand
 
+// Counts stroke changes. The worker reuses its refined result while it stays
+// the same, e.g. when only the shadow or crop option changes.
+let brushEdit = 0;
+
 const brush = createBrush({
   frame: view,
   result: () => result,
-  onChange: applyEdits,
+  onChange: () => {
+    brushEdit++;
+    applyEdits();
+  },
   onActivity: (drawing) => {
     editor.drawing = drawing;
     updateControls();

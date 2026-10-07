@@ -151,6 +151,28 @@ test('UI cannot export pending edits and ignores edits superseded during PNG dec
   assert.equal(ui.element('#download').href, ui.preview());
 });
 
+test('option changes keep the edit number and show a busy state until the result is shown', async () => {
+  const ui = app();
+  await ui.open();
+  ui.done();
+  ui.decoding[0].resolve();
+  await ui.flush();
+  const first = ui.lastRequest().edit;
+  ui.element('#shadow').listeners.click();
+  await ui.flush();
+  assert.equal(ui.lastRequest().edit, first);
+  assert.equal(ui.element('#shadow').attrs['aria-busy'], 'true');
+  assert.equal(ui.element('#crop').attrs['aria-busy'], 'false');
+  ui.done();
+  ui.decoding[1].resolve();
+  await ui.flush();
+  assert.equal(ui.element('#shadow').attrs['aria-busy'], 'false');
+  ui.edit();
+  await ui.flush();
+  assert.notEqual(ui.lastRequest().edit, first);
+  assert.equal(ui.element('#shadow').attrs['aria-busy'], 'false');
+});
+
 test('opening another image during decode prevents the previous image from appearing', async () => {
   const ui = app();
   await ui.open();

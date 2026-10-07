@@ -7,6 +7,8 @@ export type ToWorker = {
   type: 'process';
   id: number;
   image: number;
+  /** Changes when the brush strokes change. Same image and edit: the worker reuses its refined result. */
+  edit: number;
   bitmap: ImageBitmap;
   shadow: boolean;
   /** Also encode a PNG cropped to the visible pixels. */

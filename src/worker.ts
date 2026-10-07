@@ -2,7 +2,7 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import ortMjs from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url';
 import ortWasm from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
-import { contentBounds, cropRgba } from './bounds';
+import { contentBounds, cropRgba, type Bounds } from './bounds';
 import { fetchSplit } from './fetch-split';
 import { refineForeground } from './foreground';
 import { findHoles } from './holes';
@@ -175,8 +175,8 @@ function upscaleMask(logits: Float32Array, size: number, w: number, h: number) {
   return out;
 }
 
-// The mask of the last image. When only the shadow option changes, the main
-// thread sends the same image again, and the model does not run again.
+// The mask of the last image. For each change, the main thread sends the same
+// image again, and the model does not run again.
 let last: { image: number; mask: Float32Array; size: number; backend: Backend } | undefined;
 
 /**
@@ -219,12 +219,8 @@ function holeErase(erase: Float32Array | undefined, src: Float32Array | undefine
   return out;
 }
 
-async function process(id: number, image: number, bitmap: ImageBitmap, shadow: boolean, crop: boolean, edits?: ImageBitmap) {
-  if (last?.image !== image) last = { image, ...(await predict(bitmap, id)) };
-  const { mask, size, backend } = last;
-
-  const t1 = performance.now();
-  post({ type: 'progress', id, stage: 'refine' });
+/** Refines the mask and colours. The shadow is extracted, but not composed. */
+function refine(mask: Float32Array, size: number, bitmap: ImageBitmap, edits?: ImageBitmap) {
   const scale = Math.min(1, Math.sqrt(MAX_PIXELS / (bitmap.width * bitmap.height)));
   const w = Math.round(bitmap.width * scale);
   const h = Math.round(bitmap.height * scale);
@@ -240,23 +236,67 @@ async function process(id: number, image: number, bitmap: ImageBitmap, shadow: b
   const erase = edits && applyEdits(edits, alpha, w, h);
   const holes = findHoles(alpha, holeErase(erase, src), w, h);
   // Uses the original colours, so it must run before refineForeground().
-  const shadowAlpha = shadow ? extractShadow(data, alpha, w, h) : undefined;
+  // It also runs when the shadow option is off, so that a later toggle does
+  // not need the original colours again. For a background that is not plain,
+  // it stops early.
+  const shadow = extractShadow(data, alpha, w, h);
   // The object alpha is already erased. Erase the shadow too.
-  if (shadowAlpha && erase) for (let i = 0; i < erase.length; i++) shadowAlpha[i] *= 1 - erase[i];
+  if (shadow && erase) for (let i = 0; i < erase.length; i++) shadow[i] *= 1 - erase[i];
   refineForeground(data, alpha, w, h);
-  if (shadowAlpha) composeShadow(data, shadowAlpha);
+  return { w, h, data, shadow, src, holes };
+}
+
+type Refined = ReturnType<typeof refine>;
+
+/** Returns a new buffer with the shadow (if wanted) and the source transparency. */
+function compose(r: Refined, shadow: boolean) {
+  const data = r.data.slice();
+  if (shadow && r.shadow) composeShadow(data, r.shadow);
   // Keep the transparency of the source image. Apply it once to the result,
   // so that object and shadow together never have more alpha than the source.
-  if (src) for (let i = 0; i < src.length; i++) data[i * 4 + 3] *= src[i];
+  if (r.src) for (let i = 0; i < r.src.length; i++) data[i * 4 + 3] *= r.src[i];
+  return data;
+}
 
-  const content = contentBounds(data, w, h);
-  const bounds = content && (content.w < w || content.h < h) ? content : undefined;
+type Output = { blob: Blob; bounds?: Bounds; cropped?: Blob };
 
-  post({ type: 'progress', id, stage: 'encode' });
-  const cropped = crop && bounds ? await encodePng(cropRgba(data, w, bounds), bounds.w, bounds.h) : undefined;
-  const blob = await encodePng(data, w, h);
+// The refined result of the last image and brush edits. When only the shadow
+// or crop option changes, refinement does not run again. The PNGs are kept
+// for each shadow state, so toggling back is immediate.
+let refined: (Refined & { image: number; edit: number; outputs: Map<boolean, Output> }) | undefined;
+
+async function process(
+  id: number, image: number, edit: number, bitmap: ImageBitmap, shadow: boolean, crop: boolean, edits?: ImageBitmap,
+) {
+  if (last?.image !== image) last = { image, ...(await predict(bitmap, id)) };
+  const { mask, size, backend } = last;
+
+  const t1 = performance.now();
+  if (refined?.image !== image || refined.edit !== edit) {
+    post({ type: 'progress', id, stage: 'refine' });
+    // Release the old buffers before new ones are allocated.
+    refined = undefined;
+    refined = { image, edit, ...refine(mask, size, bitmap, edits), outputs: new Map() };
+  }
+  const r = refined;
+  const { w, h } = r;
+  // Without a shadow, both states give the same result.
+  const key = shadow && !!r.shadow;
+  let out = r.outputs.get(key);
+  if (!out || (crop && out.bounds && !out.cropped)) {
+    post({ type: 'progress', id, stage: 'encode' });
+    const data = compose(r, key);
+    if (!out) {
+      const content = contentBounds(data, w, h);
+      const bounds = content && (content.w < w || content.h < h) ? content : undefined;
+      out = { bounds, blob: await encodePng(data, w, h) };
+      r.outputs.set(key, out);
+    }
+    if (crop && out.bounds) out.cropped = await encodePng(cropRgba(data, w, out.bounds), out.bounds.w, out.bounds.h);
+  }
   console.info(`Refine + encode (${w}×${h}): ${Math.round(performance.now() - t1)} ms`);
-  post({ type: 'done', id, blob, width: w, height: h, backend, holes, bounds, cropped });
+  const { blob, bounds } = out;
+  post({ type: 'done', id, blob, width: w, height: h, backend, holes: r.holes, bounds, cropped: crop ? out.cropped : undefined });
 }
 
 function postError(err: unknown, id: number) {
@@ -281,10 +321,10 @@ async function enqueue(req: ProcessRequest) {
   if (running) return;
   running = true;
   while (waiting) {
-    const { id, image, bitmap, shadow, crop, edits } = waiting;
+    const { id, image, edit, bitmap, shadow, crop, edits } = waiting;
     waiting = undefined;
     try {
-      await process(id, image, bitmap, shadow, crop, edits);
+      await process(id, image, edit, bitmap, shadow, crop, edits);
     } catch (err) {
       postError(err, id);
     } finally {

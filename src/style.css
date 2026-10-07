@@ -608,10 +608,29 @@ button.toggle[aria-pressed='true'] .switch::after {
   transform: translateX(10px);
 }
 
+/* While a change of the option is applied. Short updates do not flash. */
+button.toggle[aria-busy='true'] {
+  cursor: progress;
+}
+
+button.toggle[aria-busy='true'] > * {
+  animation: busy 0.7s ease-in-out 0.2s infinite alternate;
+}
+
+@keyframes busy {
+  to {
+    opacity: 0.35;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .switch,
   .switch::after {
     transition: none;
+  }
+  button.toggle[aria-busy='true'] > * {
+    animation: none;
+    opacity: 0.5;
   }
 }
 
