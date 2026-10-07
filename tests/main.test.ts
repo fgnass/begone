@@ -158,9 +158,12 @@ test('option changes keep the edit number and show a busy state until the result
   ui.decoding[0].resolve();
   await ui.flush();
   const first = ui.lastRequest().edit;
+  assert.ok(ui.lastRequest().bitmap);
   ui.element('#shadow').listeners.click();
   await ui.flush();
   assert.equal(ui.lastRequest().edit, first);
+  // The worker keeps the image, so the file is not decoded again.
+  assert.equal(ui.lastRequest().bitmap, undefined);
   assert.equal(ui.element('#shadow').attrs['aria-busy'], 'true');
   assert.equal(ui.element('#crop').attrs['aria-busy'], 'false');
   ui.done();
@@ -202,6 +205,8 @@ test('worker script failure exits working state and retry creates a new worker',
   ui.element('#retry').listeners.click();
   await ui.flush();
   assert.equal(ui.workers.length, 2);
+  // The new worker does not have the image yet.
+  assert.ok(ui.lastRequest().bitmap);
   assert.equal(first.terminated, true);
   ui.done();
   ui.decoding[0].resolve();

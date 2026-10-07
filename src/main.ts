@@ -34,6 +34,10 @@ const undoButton = $<HTMLButtonElement>('#undo');
 
 registerSW({ immediate: true });
 
+// The image that the worker holds. Other requests for it send no bitmap, so
+// that a change does not decode the file again.
+let workerImage: number | undefined;
+
 const worker = new WorkerClient(
   () => new Worker(new URL('./worker.ts', import.meta.url), {
     type: 'module',
@@ -41,6 +45,7 @@ const worker = new WorkerClient(
   }),
   handleWorkerMessage,
   (message) => {
+    workerImage = undefined;
     editor.fail();
     renderState();
     showError(`Error: ${message}`, editor.file ? processImage : undefined);
@@ -173,6 +178,8 @@ function handleWorkerMessage(msg: FromWorker) {
   } else if (msg.type === 'done') {
     void showResult(request, msg);
   } else {
+    // A retry sends the image again, in case the worker lost it.
+    workerImage = undefined;
     fail(request, `Error: ${msg.message}`);
   }
 }
@@ -233,32 +240,36 @@ async function processImage() {
   let bitmap: ImageBitmap | undefined;
   let edits: ImageBitmap | undefined;
   try {
-    try {
-      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    } catch {
-      fail(request, 'Your browser cannot read this image format.', false);
-      return;
-    }
-    if (!editor.isCurrent(request)) {
-      bitmap.close();
-      finishObsolete(request);
-      return;
+    if (workerImage !== request.image) {
+      try {
+        bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      } catch {
+        fail(request, 'Your browser cannot read this image format.', false);
+        return;
+      }
+      if (!editor.isCurrent(request)) {
+        bitmap.close();
+        finishObsolete(request);
+        return;
+      }
     }
     // Read synchronously with the strokes, so that both match.
     const edit = brushEdit;
     const strokes = await brush.edits();
     edits = strokes.bitmap;
     if (!editor.isCurrent(request)) {
-      bitmap.close();
+      bitmap?.close();
       edits?.close();
       finishObsolete(request);
       return;
     }
     request.strokes = strokes.count;
-    if (!request.quiet) dims.textContent = `${bitmap.width} × ${bitmap.height}`;
-    const transfer = edits ? [bitmap, edits] : [bitmap];
-    if (!worker.send({ type: 'process', id: request.id, image: request.image, edit, bitmap, shadow, crop, edits }, transfer)) {
-      bitmap.close();
+    if (bitmap && !request.quiet) dims.textContent = `${bitmap.width} × ${bitmap.height}`;
+    const transfer = [bitmap, edits].filter((b) => !!b);
+    if (worker.send({ type: 'process', id: request.id, image: request.image, edit, bitmap, shadow, crop, edits }, transfer)) {
+      if (bitmap) workerImage = request.image;
+    } else {
+      bitmap?.close();
       edits?.close();
     }
   } catch (err) {

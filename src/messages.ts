@@ -9,7 +9,8 @@ export type ToWorker = {
   image: number;
   /** Changes when the brush strokes change. Same image and edit: the worker reuses its refined result. */
   edit: number;
-  bitmap: ImageBitmap;
+  /** The decoded image. Sent only with the first request for an image; the worker keeps it. */
+  bitmap?: ImageBitmap;
   shadow: boolean;
   /** Also encode a PNG cropped to the visible pixels. */
   crop: boolean;

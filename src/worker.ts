@@ -228,7 +228,6 @@ function refine(mask: Float32Array, size: number, bitmap: ImageBitmap, edits?: I
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bitmap, 0, 0, w, h);
-  bitmap.close();
   const { data } = ctx.getImageData(0, 0, w, h);
   const alpha = upscaleMask(mask, size, w, h);
   // refineForeground() overwrites the alpha channel, so keep it.
@@ -265,9 +264,13 @@ type Output = { blob: Blob; bounds?: Bounds; cropped?: Blob };
 // for each shadow state, so toggling back is immediate.
 let refined: (Refined & { image: number; edit: number; outputs: Map<boolean, Output> }) | undefined;
 
-async function process(
-  id: number, image: number, edit: number, bitmap: ImageBitmap, shadow: boolean, crop: boolean, edits?: ImageBitmap,
-) {
+// The decoded image. The main thread sends it once per image, so that a
+// change does not decode the file again.
+let source: { image: number; bitmap: ImageBitmap } | undefined;
+
+async function process(id: number, image: number, edit: number, shadow: boolean, crop: boolean, edits?: ImageBitmap) {
+  if (source?.image !== image) throw new Error('The image is not loaded. Open it again.');
+  const { bitmap } = source;
   if (last?.image !== image) last = { image, ...(await predict(bitmap, id)) };
   const { mask, size, backend } = last;
 
@@ -313,22 +316,18 @@ let waiting: ProcessRequest | undefined;
 let running = false;
 
 async function enqueue(req: ProcessRequest) {
-  if (waiting) {
-    waiting.bitmap.close();
-    waiting.edits?.close();
-  }
+  waiting?.edits?.close();
   waiting = req;
   if (running) return;
   running = true;
   while (waiting) {
-    const { id, image, edit, bitmap, shadow, crop, edits } = waiting;
+    const { id, image, edit, shadow, crop, edits } = waiting;
     waiting = undefined;
     try {
-      await process(id, image, edit, bitmap, shadow, crop, edits);
+      await process(id, image, edit, shadow, crop, edits);
     } catch (err) {
       postError(err, id);
     } finally {
-      bitmap.close();
       edits?.close();
     }
   }
@@ -337,5 +336,10 @@ async function enqueue(req: ProcessRequest) {
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data;
+  // Keep the image even if a newer request replaces this one.
+  if (msg.bitmap) {
+    source?.bitmap.close();
+    source = { image: msg.image, bitmap: msg.bitmap };
+  }
   void enqueue(msg);
 };
