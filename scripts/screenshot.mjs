@@ -16,6 +16,9 @@
  *   public/screenshots/original.png the same frame with "Original" pressed, so
  *                                   the photo still has its background
  *   public/screenshots/start.png    the empty start screen
+ *   public/screenshots/og.png       the link preview (og:image): the result on
+ *                                   a desktop viewport, in a browser window on
+ *                                   the pink of gnass.buzz/projects, 2400 × 1260
  *
  * Demo photo: scripts/assets/banana.jpg, "riped banana on pink surface" by
  * Mike Dorner (https://unsplash.com/photos/sf_1ZDA1YFw), Unsplash License.
@@ -23,7 +26,7 @@
  * Re-run any time the UI changes:  npm run screenshot
  */
 import { spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -55,6 +58,53 @@ async function removeBackground(page) {
   );
 }
 
+// Link previews use 1.91:1 (1200 × 630). The browser window sits in it with a
+// margin, so the app viewport is the window minus its border and title bar.
+const OG = { width: 1200, height: 630 };
+const OG_WINDOW = { x: 60, y: 40, width: 1080, height: 534, bar: 40, border: 2 };
+const OG_CONTENT = {
+  width: OG_WINDOW.width - 2 * OG_WINDOW.border,
+  height: OG_WINDOW.height - OG_WINDOW.bar - 2 * OG_WINDOW.border,
+};
+
+/**
+ * Puts a screenshot in a stylized browser window on the accent color of
+ * begone on gnass.buzz/projects, with the same frame color and hard shadow.
+ */
+async function frameInBrowser(browser, png) {
+  const w = OG_WINDOW;
+  const html = `<!doctype html>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { width: ${OG.width}px; height: ${OG.height}px; background: #ff3ea5; overflow: hidden; }
+  .window {
+    position: absolute; left: ${w.x}px; top: ${w.y}px; width: ${w.width}px; height: ${w.height}px;
+    border: ${w.border}px solid #3d0722; border-radius: 16px; overflow: hidden;
+    background: #3d0722; box-shadow: 0 10px #00000038;
+  }
+  .bar { position: relative; height: ${w.bar}px; display: flex; align-items: center; padding-left: 16px; gap: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: #ff3ea5; opacity: 0.6; }
+  .url {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 360px; height: 26px; border-radius: 13px; background: #ffffff1a;
+    color: #ffd3ea; font: 500 13px/26px system-ui, sans-serif; text-align: center; letter-spacing: 0.02em;
+  }
+  img { display: block; width: ${OG_CONTENT.width}px; height: ${OG_CONTENT.height}px; }
+</style>
+<div class="window">
+  <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">bg.gnass.buzz</span></div>
+  <img src="data:image/png;base64,${png.toString('base64')}" />
+</div>`;
+  const context = await browser.newContext({ viewport: OG, deviceScaleFactor: SCALE });
+  try {
+    const page = await context.newPage();
+    await page.setContent(html, { waitUntil: 'load' });
+    return { png: await page.screenshot(), size: { width: OG.width * SCALE, height: OG.height * SCALE } };
+  } finally {
+    await context.close();
+  }
+}
+
 const RESULT_STORAGE = { 'bg-theme': 'checker', 'bg-shadow': 'on', 'bg-crop': 'on' };
 
 /** Each shot: the saved options (localStorage) and how to bring the app into its state. */
@@ -73,6 +123,15 @@ const SHOTS = {
   start: {
     storage: { 'bg-theme': 'light' },
     async stage() {},
+  },
+  // Link preview for LinkedIn, Slack etc. The app fills the content area of
+  // the browser window that frameInBrowser() draws.
+  og: {
+    viewport: OG_CONTENT,
+    mobile: false,
+    storage: RESULT_STORAGE,
+    stage: removeBackground,
+    compose: frameInBrowser,
   },
 };
 
@@ -96,11 +155,12 @@ function startServer() {
 
 /** Capture one shot in its own context (own localStorage), then dispose it. */
 async function capture(browser, name, shot) {
+  const { viewport = VIEWPORT, scale = SCALE, mobile = true } = shot;
   const context = await browser.newContext({
-    viewport: VIEWPORT,
-    deviceScaleFactor: SCALE,
-    isMobile: true,
-    hasTouch: true,
+    viewport,
+    deviceScaleFactor: scale,
+    isMobile: mobile,
+    hasTouch: mobile,
     // Freeze CSS transitions/keyframes so the captured frame is deterministic.
     reducedMotion: 'reduce',
   });
@@ -117,9 +177,12 @@ async function capture(browser, name, shot) {
     await shot.stage(page);
     // Let the last layout settle before the capture.
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    let png = await page.screenshot();
+    let size = { width: viewport.width * scale, height: viewport.height * scale };
+    if (shot.compose) ({ png, size } = await shot.compose(browser, png));
     const out = resolve(outDir, `${name}.png`);
-    await page.screenshot({ path: out });
-    console.log(`Saved ${out} (${VIEWPORT.width * SCALE} × ${VIEWPORT.height * SCALE})`);
+    await writeFile(out, png);
+    console.log(`Saved ${out} (${size.width} × ${size.height})`);
   } finally {
     await context.close();
   }
