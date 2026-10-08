@@ -76,6 +76,7 @@ svg {
   flex: none;
 }
 
+/* Filled parts of an icon, e.g. two fields of the checkerboard. */
 svg .fill {
   fill: currentColor;
   stroke: none;
