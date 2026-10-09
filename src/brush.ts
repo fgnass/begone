@@ -4,16 +4,20 @@
 // Strokes are kept as vectors in result pixels, so undo is cheap. For each
 // update, all strokes are drawn into one edit image: red = restore,
 // green = erase, alpha = coverage. The worker applies it to the model mask.
+//
+// "Fill holes" is an edit too, so that it is part of the same undo history.
+// It has no shape here: the worker fills the holes it finds after the strokes.
 
 export type BrushMode = 'restore' | 'erase';
 
-type Stroke = { mode: BrushMode; size: number; points: [number, number][] };
+type Stroke = { mode: BrushMode; size: number; points: [number, number][] } | { mode: 'holes' };
 
 const EDIT_COLORS: Record<BrushMode, string> = { restore: '#f00', erase: '#0f0' };
 const PREVIEW_COLORS: Record<BrushMode, string> = { restore: '#ff3ea5', erase: '#00a3ff' };
 
-function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, color: string) {
-  ctx.fillStyle = ctx.strokeStyle = color;
+function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, colors: Record<BrushMode, string>) {
+  if (s.mode === 'holes') return;
+  ctx.fillStyle = ctx.strokeStyle = colors[s.mode];
   ctx.lineWidth = s.size;
   ctx.lineCap = ctx.lineJoin = 'round';
   const [x0, y0] = s.points[0];
@@ -52,15 +56,15 @@ export function createBrush(opts: {
   let size = 40; // CSS pixels
   let strokes: Stroke[] = [];
   let applied = 0; // strokes[0..applied) are in the current result
-  let current: Stroke | undefined;
+  let current: Extract<Stroke, { size: number }> | undefined;
 
   /** Result pixels per CSS pixel. */
   const scale = () => result().naturalWidth / result().clientWidth;
 
   function redraw() {
     pctx.clearRect(0, 0, preview.width, preview.height);
-    for (const s of strokes.slice(applied)) drawStroke(pctx, s, PREVIEW_COLORS[s.mode]);
-    if (current) drawStroke(pctx, current, PREVIEW_COLORS[current.mode]);
+    for (const s of strokes.slice(applied)) drawStroke(pctx, s, PREVIEW_COLORS);
+    if (current) drawStroke(pctx, current, PREVIEW_COLORS);
   }
 
   function point(e: PointerEvent): [number, number] {
@@ -128,6 +132,13 @@ export function createBrush(opts: {
       cursor.style.width = cursor.style.height = `${size}px`;
     },
 
+    /** Fills all holes that the result marks. An edit like a stroke, so undo takes it back. */
+    fillHoles() {
+      if (current) end();
+      strokes.push({ mode: 'holes' });
+      onChange();
+    },
+
     undo() {
       if (!strokes.length) return;
       strokes.pop();
@@ -148,15 +159,17 @@ export function createBrush(opts: {
 
     /**
      * Draws all strokes into an edit image of the result size. Returns the
-     * image and the stroke count it holds, for markApplied().
+     * image, whether holes are to be filled, and the edit count it holds,
+     * for markApplied().
      */
     async edits() {
       const count = strokes.length;
-      if (!count) return { bitmap: undefined, count };
+      const fillHoles = strokes.some((s) => s.mode === 'holes');
+      if (!strokes.some((s) => s.mode !== 'holes')) return { bitmap: undefined, fillHoles, count };
       const canvas = new OffscreenCanvas(result().naturalWidth, result().naturalHeight);
       const ctx = canvas.getContext('2d')! as unknown as CanvasRenderingContext2D;
-      for (const s of strokes) drawStroke(ctx, s, EDIT_COLORS[s.mode]);
-      return { bitmap: canvas.transferToImageBitmap(), count };
+      for (const s of strokes) drawStroke(ctx, s, EDIT_COLORS);
+      return { bitmap: canvas.transferToImageBitmap(), fillHoles, count };
     },
 
     /** Call when a result with the first `count` strokes is shown. */

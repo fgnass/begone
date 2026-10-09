@@ -5,9 +5,10 @@ import ortWasm from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import { contentBounds, cropRgba, type Bounds } from './bounds';
 import { fetchSplit } from './fetch-split';
 import { refineForeground } from './foreground';
-import { findHoles } from './holes';
+import { fillHoles, findHoles } from './holes';
 import { encodePng } from './png';
-import { composeShadow, extractShadow } from './shadow';
+import { downscaleMask, downscaleRgba, previewScale } from './preview';
+import { composeShadow, extractShadow, shadowColor, softenShadow, type Shadow } from './shadow';
 import type { Backend, FromWorker, ToWorker } from './messages';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -220,7 +221,7 @@ function holeErase(erase: Float32Array | undefined, src: Float32Array | undefine
 }
 
 /** Refines the mask and colours. The shadow is extracted, but not composed. */
-function refine(mask: Float32Array, size: number, bitmap: ImageBitmap, edits?: ImageBitmap) {
+function refine(mask: Float32Array, size: number, bitmap: ImageBitmap, holes: boolean, edits?: ImageBitmap) {
   const scale = Math.min(1, Math.sqrt(MAX_PIXELS / (bitmap.width * bitmap.height)));
   const w = Math.round(bitmap.width * scale);
   const h = Math.round(bitmap.height * scale);
@@ -233,24 +234,27 @@ function refine(mask: Float32Array, size: number, bitmap: ImageBitmap, edits?: I
   // refineForeground() overwrites the alpha channel, so keep it.
   const src = sourceAlpha(data);
   const erase = edits && applyEdits(edits, alpha, w, h);
-  const holes = findHoles(alpha, holeErase(erase, src), w, h);
+  if (holes) fillHoles(alpha, holeErase(erase, src), w, h);
+  const found = findHoles(alpha, holeErase(erase, src), w, h);
   // Uses the original colours, so it must run before refineForeground().
   // It also runs when the shadow option is off, so that a later toggle does
   // not need the original colours again. For a background that is not plain,
   // it stops early.
   const shadow = extractShadow(data, alpha, w, h);
   // The object alpha is already erased. Erase the shadow too.
-  if (shadow && erase) for (let i = 0; i < erase.length; i++) shadow[i] *= 1 - erase[i];
+  if (shadow && erase) for (let i = 0; i < erase.length; i++) shadow.mask[i] *= 1 - erase[i];
   refineForeground(data, alpha, w, h);
-  return { w, h, data, shadow, src, holes };
+  return { w, h, data, shadow, src, holes: found };
 }
 
 type Refined = ReturnType<typeof refine>;
 
 /** Returns a new buffer with the shadow (if wanted) and the source transparency. */
-function compose(r: Refined, shadow: boolean) {
+function compose(r: Refined, shadow: boolean, soft: number, temperature?: number) {
   const data = r.data.slice();
-  if (shadow && r.shadow) composeShadow(data, r.shadow);
+  if (shadow && r.shadow) {
+    composeShadow(data, softenShadow(r.shadow, soft, r.w, r.h, data), shadowColor(r.shadow, temperature));
+  }
   // Keep the transparency of the source image. Apply it once to the result,
   // so that object and shadow together never have more alpha than the source.
   if (r.src) for (let i = 0; i < r.src.length; i++) data[i * 4 + 3] *= r.src[i];
@@ -259,16 +263,20 @@ function compose(r: Refined, shadow: boolean) {
 
 type Output = { blob: Blob; bounds?: Bounds; cropped?: Blob };
 
-// The refined result of the last image and brush edits. When only the shadow
-// or crop option changes, refinement does not run again. The PNGs are kept
-// for each shadow state, so toggling back is immediate.
-let refined: (Refined & { image: number; edit: number; outputs: Map<boolean, Output> }) | undefined;
+/** A small copy of the refined result for shadow previews. */
+type Preview = { size: number; w: number; h: number; data: Uint8ClampedArray; src?: Float32Array; shadow: Shadow };
+
+// The refined result of the last image and brush edits. When only the shadow,
+// light or crop option changes, refinement does not run again. The PNGs are
+// kept for the last few option states, so toggling back is immediate.
+let refined: (Refined & { image: number; edit: number; outputs: Map<string, Output>; preview?: Preview }) | undefined;
+const MAX_OUTPUTS = 8;
 
 // The decoded image. The main thread sends it once per image, so that a
 // change does not decode the file again.
 let source: { image: number; bitmap: ImageBitmap } | undefined;
 
-async function process(id: number, image: number, edit: number, shadow: boolean, crop: boolean, edits?: ImageBitmap) {
+async function process(id: number, image: number, edit: number, shadow: boolean, soft: number, temperature: number | undefined, crop: boolean, holes: boolean, edits?: ImageBitmap) {
   if (source?.image !== image) throw new Error('The image is not loaded. Open it again.');
   const { bitmap } = source;
   if (last?.image !== image) last = { image, ...(await predict(bitmap, id)) };
@@ -279,27 +287,73 @@ async function process(id: number, image: number, edit: number, shadow: boolean,
     post({ type: 'progress', id, stage: 'refine' });
     // Release the old buffers before new ones are allocated.
     refined = undefined;
-    refined = { image, edit, ...refine(mask, size, bitmap, edits), outputs: new Map() };
+    refined = { image, edit, ...refine(mask, size, bitmap, holes, edits), outputs: new Map() };
   }
   const r = refined;
   const { w, h } = r;
-  // Without a shadow, both states give the same result.
-  const key = shadow && !!r.shadow;
+  // Without a shadow, the shadow settings change nothing.
+  const hasShadow = shadow && !!r.shadow;
+  const key = hasShadow ? `shadow|${soft}|${temperature ?? 'measured'}` : 'plain';
   let out = r.outputs.get(key);
   if (!out || (crop && out.bounds && !out.cropped)) {
     post({ type: 'progress', id, stage: 'encode' });
-    const data = compose(r, key);
+    const data = compose(r, hasShadow, soft, temperature);
     if (!out) {
       const content = contentBounds(data, w, h);
       const bounds = content && (content.w < w || content.h < h) ? content : undefined;
       out = { bounds, blob: await encodePng(data, w, h) };
+      if (r.outputs.size >= MAX_OUTPUTS) r.outputs.delete(r.outputs.keys().next().value!);
       r.outputs.set(key, out);
     }
     if (crop && out.bounds) out.cropped = await encodePng(cropRgba(data, w, out.bounds), out.bounds.w, out.bounds.h);
   }
   console.info(`Refine + encode (${w}×${h}): ${Math.round(performance.now() - t1)} ms`);
   const { blob, bounds } = out;
-  post({ type: 'done', id, blob, width: w, height: h, backend, holes: r.holes, bounds, cropped: crop ? out.cropped : undefined });
+  post({
+    type: 'done', id, blob, width: w, height: h, backend, holes: r.holes, bounds,
+    shadow: r.shadow && { temperature: r.shadow.temperature },
+    cropped: crop ? out.cropped : undefined,
+  });
+}
+
+/** The small copy for previews, made once per refined result and display size. */
+function getPreview(r: NonNullable<typeof refined>, size: number): Preview | undefined {
+  if (!r.shadow) return;
+  if (r.preview?.size === size) return r.preview;
+  const scale = previewScale(r.w, r.h, size);
+  const w = Math.max(1, Math.round(r.w * scale));
+  const h = Math.max(1, Math.round(r.h * scale));
+  const { color, temperature, extent } = r.shadow;
+  r.preview = {
+    size, w, h,
+    data: downscaleRgba(r.data, r.w, r.h, w, h),
+    src: r.src && downscaleMask(r.src, r.w, r.h, w, h),
+    shadow: { mask: downscaleMask(r.shadow.mask, r.w, r.h, w, h), color, temperature, extent: extent * scale },
+  };
+  return r.preview;
+}
+
+/**
+ * Renders a preview of the shadow settings as a bitmap. Runs outside the
+ * queue: it needs no model and no PNG, and a stale preview is no harm.
+ */
+async function preview(msg: Extract<ToWorker, { type: 'preview' }>) {
+  const { id, image, edit, soft, temperature, size } = msg;
+  const r = refined;
+  if (!r || r.image !== image || r.edit !== edit) {
+    post({ type: 'preview', id, image });
+    return;
+  }
+  const p = getPreview(r, size);
+  if (!p) {
+    post({ type: 'preview', id, image });
+    return;
+  }
+  const data = p.data.slice();
+  composeShadow(data, softenShadow(p.shadow, soft, p.w, p.h, data), shadowColor(p.shadow, temperature));
+  if (p.src) for (let i = 0; i < p.src.length; i++) data[i * 4 + 3] *= p.src[i];
+  const bitmap = await createImageBitmap(new ImageData(data, p.w, p.h), { premultiplyAlpha: 'none' });
+  post({ type: 'preview', id, image, bitmap }, [bitmap]);
 }
 
 function postError(err: unknown, id: number) {
@@ -321,10 +375,10 @@ async function enqueue(req: ProcessRequest) {
   if (running) return;
   running = true;
   while (waiting) {
-    const { id, image, edit, shadow, crop, edits } = waiting;
+    const { id, image, edit, shadow, soft, temperature, crop, fillHoles, edits } = waiting;
     waiting = undefined;
     try {
-      await process(id, image, edit, shadow, crop, edits);
+      await process(id, image, edit, shadow, soft, temperature, crop, fillHoles, edits);
     } catch (err) {
       postError(err, id);
     } finally {
@@ -336,6 +390,13 @@ async function enqueue(req: ProcessRequest) {
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data;
+  if (msg.type === 'preview') {
+    preview(msg).catch((err) => {
+      console.warn('Preview failed', err);
+      post({ type: 'preview', id: msg.id, image: msg.image });
+    });
+    return;
+  }
   // Keep the image even if a newer request replaces this one.
   if (msg.bitmap) {
     source?.bitmap.close();

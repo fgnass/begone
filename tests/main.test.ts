@@ -26,6 +26,10 @@ class Element {
   naturalWidth = 100;
   naturalHeight = 80;
   clientWidth = 100;
+  clientHeight = 80;
+  width = 0;
+  height = 0;
+  getContext() { return { clearRect() {}, drawImage() {} }; }
   classList = new Classes();
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
@@ -48,6 +52,7 @@ function app() {
   const decoding: { resolve: () => void; reject: (error: Error) => void }[] = [];
   const workers: any[] = [];
   let strokes = 0;
+  let filled = false;
   let applied = -1;
   let brushOptions: any;
   let clipboardWrites = 0;
@@ -86,8 +91,9 @@ function app() {
       return {
         mode: undefined, size: 40, get canUndo() { return strokes > 0; },
         setMode() {}, setSize() {}, undo() { strokes--; options.onChange(); },
-        reset() { strokes = 0; options.onActivity(false); },
-        edits: async () => ({ bitmap: undefined, count: strokes }),
+        fillHoles() { strokes++; filled = true; options.onChange(); },
+        reset() { strokes = 0; filled = false; options.onActivity(false); },
+        edits: async () => ({ bitmap: undefined, fillHoles: filled, count: strokes }),
         markApplied(count: number) { applied = count; },
       };
     },
@@ -174,6 +180,127 @@ test('option changes keep the edit number and show a busy state until the result
   await ui.flush();
   assert.notEqual(ui.lastRequest().edit, first);
   assert.equal(ui.element('#shadow').attrs['aria-busy'], 'false');
+});
+
+test('shadow controls appear with a shadow, preview while a slider moves and process on release', async () => {
+  const ui = app();
+  await ui.open();
+  assert.equal(ui.lastRequest().soft, 0);
+  assert.equal(ui.lastRequest().temperature, undefined);
+  assert.equal(ui.element('#shadow-group').hidden, true);
+  ui.done({ shadow: { temperature: 0.2 } });
+  ui.decoding[0].resolve();
+  await ui.flush();
+  assert.equal(ui.element('#shadow-group').hidden, false);
+  assert.equal(ui.element('#shadow-original').value, '20');
+  assert.equal(ui.element('#shadow-temp').value, '20');
+  const first = ui.lastRequest().edit;
+
+  // A move asks for a preview, not for a result. The export waits.
+  ui.element('#shadow-temp').value = '-60';
+  ui.element('#shadow-temp').listeners.input();
+  await ui.flush();
+  const preview = ui.lastRequest();
+  assert.equal(preview.type, 'preview');
+  assert.equal(preview.temperature, -0.6);
+  assert.equal(preview.edit, first);
+  assert.equal(ui.state().canExport, false);
+  assert.equal(ui.element('#shadow').attrs['aria-busy'], 'false');
+  // A second move while the preview runs waits for the answer, then goes out with the newest value.
+  ui.element('#shadow-temp').value = '-80';
+  ui.element('#shadow-temp').listeners.input();
+  assert.equal(ui.lastRequest(), preview);
+  let closed = 0;
+  ui.workers.at(-1).onmessage({ data: { type: 'preview', id: preview.id, image: preview.image, bitmap: { width: 50, height: 40, close() { closed++; } } } });
+  assert.equal(closed, 1);
+  assert.equal(ui.element('#preview').hidden, false);
+  assert.equal(ui.element('#frame').classList.contains('previewing'), true);
+  assert.equal(ui.lastRequest().type, 'preview');
+  assert.equal(ui.lastRequest().temperature, -0.8);
+
+  // Release: the real result, with the same edit number.
+  ui.element('#shadow-temp').listeners.change();
+  await ui.flush();
+  assert.equal(ui.lastRequest().type, 'process');
+  assert.equal(ui.lastRequest().temperature, -0.8);
+  assert.equal(ui.lastRequest().edit, first);
+  ui.done({ shadow: { temperature: 0.2 } });
+  ui.decoding[1].resolve();
+  await ui.flush();
+  assert.equal(ui.element('#preview').hidden, true);
+  assert.equal(ui.element('#frame').classList.contains('previewing'), false);
+  assert.equal(ui.state().canExport, true);
+  // A late preview answer is dropped.
+  ui.workers.at(-1).onmessage({ data: { type: 'preview', id: 99, image: preview.image, bitmap: { width: 50, height: 40, close() { closed++; } } } });
+  assert.equal(closed, 2);
+  assert.equal(ui.element('#preview').hidden, true);
+
+  // Near the measured colour, the measured colour is used.
+  ui.element('#shadow-temp').value = '21';
+  ui.element('#shadow-temp').listeners.input();
+  ui.element('#shadow-temp').listeners.change();
+  await ui.flush();
+  assert.equal(ui.lastRequest().type, 'process');
+  assert.equal(ui.lastRequest().temperature, undefined);
+  ui.done({ shadow: { temperature: 0.2 } });
+  ui.decoding[2].resolve();
+  await ui.flush();
+
+  ui.element('#shadow-soft').value = '50';
+  ui.element('#shadow-soft').listeners.input();
+  ui.element('#shadow-soft').listeners.change();
+  await ui.flush();
+  assert.equal(ui.lastRequest().type, 'process');
+  assert.equal(ui.lastRequest().soft, 0.5);
+  ui.done({ shadow: { temperature: 0.2 } });
+  ui.decoding[3].resolve();
+  await ui.flush();
+  assert.equal(ui.state().canExport, true);
+
+  // Each slider panel opens from its button, one at a time, and closes when the shadow is off.
+  assert.equal(ui.element('#shadow-temp-panel').hidden, true);
+  ui.element('#shadow-temp-button').listeners.click();
+  assert.equal(ui.element('#shadow-temp-panel').hidden, false);
+  assert.equal(ui.element('#shadow-temp-button').attrs['aria-expanded'], 'true');
+  ui.element('#shadow-soft-button').listeners.click();
+  assert.equal(ui.element('#shadow-temp-panel').hidden, true);
+  assert.equal(ui.element('#shadow-soft-panel').hidden, false);
+  ui.element('#shadow').listeners.click();
+  assert.equal(ui.element('#shadow-soft-button').disabled, true);
+  assert.equal(ui.element('#shadow-soft-panel').hidden, true);
+  ui.element('#shadow').listeners.click();
+  await ui.flush();
+  ui.done({ shadow: { temperature: 0.2 } });
+  ui.decoding[4].resolve();
+  await ui.flush();
+
+  // A new image without a shadow hides the group, and its temperature is forgotten.
+  await ui.open();
+  assert.equal(ui.element('#shadow-group').hidden, true);
+  assert.equal(ui.lastRequest().soft, 0.5);
+  assert.equal(ui.lastRequest().temperature, undefined);
+  ui.done();
+  ui.decoding[5].resolve();
+  await ui.flush();
+  assert.equal(ui.element('#shadow-group').hidden, true);
+});
+
+test('the hint fills all holes as one undoable edit', async () => {
+  const ui = app();
+  await ui.open();
+  ui.done();
+  ui.decoding[0].resolve();
+  await ui.flush();
+  assert.equal(ui.lastRequest().fillHoles, false);
+  ui.element('#hint-fill').listeners.click();
+  await ui.flush();
+  assert.equal(ui.lastRequest().fillHoles, true);
+  assert.equal(ui.state().canExport, false);
+  ui.done();
+  ui.decoding[1].resolve();
+  await ui.flush();
+  assert.equal(ui.applied(), 1);
+  assert.equal(ui.state().canExport, true);
 });
 
 test('opening another image during decode prevents the previous image from appearing', async () => {

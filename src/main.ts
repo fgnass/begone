@@ -27,12 +27,71 @@ const compare = $<HTMLButtonElement>('#compare');
 const copy = $<HTMLButtonElement>('#copy');
 const shadowButton = $<HTMLButtonElement>('#shadow');
 const cropButton = $<HTMLButtonElement>('#crop');
+const shadowGroup = $('#shadow-group');
+const shadowTempButton = $<HTMLButtonElement>('#shadow-temp-button');
+const shadowTempPanel = $('#shadow-temp-panel');
+const shadowSoftButton = $<HTMLButtonElement>('#shadow-soft-button');
+const shadowSoftPanel = $('#shadow-soft-panel');
+const shadowTemp = $<HTMLInputElement>('#shadow-temp');
+const shadowOriginal = $<HTMLOptionElement>('#shadow-original');
+const shadowSoft = $<HTMLInputElement>('#shadow-soft');
+const previewCanvas = $<HTMLCanvasElement>('#preview');
 const restoreButton = $<HTMLButtonElement>('#restore');
 const eraseButton = $<HTMLButtonElement>('#erase');
 const brushSize = $<HTMLInputElement>('#brush-size');
+const brushSizePanel = $('#brush-size-panel');
 const undoButton = $<HTMLButtonElement>('#undo');
 
 registerSW({ immediate: true });
+
+// Sliders sit in small panels above their buttons. One is open at a time.
+// The brush size panel belongs to the active brush button; the shadow
+// panels have a button of their own, which also opens and closes them.
+
+type Pop = { readonly button: HTMLButtonElement; panel: HTMLElement; toggles: boolean };
+
+const brushPop: Pop = {
+  get button() {
+    return brush.mode === 'erase' ? eraseButton : restoreButton;
+  },
+  panel: brushSizePanel,
+  toggles: false,
+};
+const pops: Pop[] = [
+  brushPop,
+  { button: shadowTempButton, panel: shadowTempPanel, toggles: true },
+  { button: shadowSoftButton, panel: shadowSoftPanel, toggles: true },
+];
+
+function openPop(open: Pop | undefined) {
+  for (const pop of pops) {
+    const on = pop === open;
+    pop.panel.hidden = !on;
+    pop.button.setAttribute('aria-expanded', String(on));
+    if (pop.toggles) pop.button.setAttribute('aria-pressed', String(on));
+  }
+  if (open === brushPop) {
+    // Centre the panel over the active brush button.
+    const button = brushPop.button;
+    brushPop.panel.style.left = `${button.offsetLeft + button.offsetWidth / 2}px`;
+  }
+}
+
+/** A panel whose button got disabled closes. */
+function closeDisabledPops() {
+  for (const pop of pops) if (pop.button.disabled && !pop.panel.hidden) openPop(undefined);
+}
+
+for (const pop of pops) {
+  if (pop.toggles) pop.button.addEventListener('click', () => openPop(pop.panel.hidden ? pop : undefined));
+}
+// A click outside the open panel and its button closes it.
+window.addEventListener('pointerdown', (e) => {
+  const target = e.target as Node | null;
+  const open = pops.find((pop) => !pop.panel.hidden);
+  if (!open || !target || open.panel.contains(target) || open.button.contains(target)) return;
+  openPop(undefined);
+});
 
 // The image that the worker holds. Other requests for it send no bitmap, so
 // that a change does not decode the file again.
@@ -120,6 +179,8 @@ function updateControls() {
   if (editor.canExport && exportUrl) download.href = exportUrl;
   else download.removeAttribute('href');
   shadowButton.disabled = cropButton.disabled = editor.phase === 'working';
+  shadowTempButton.disabled = shadowSoftButton.disabled = shadowButton.disabled || !keepShadow;
+  closeDisabledPops();
   if (editor.phase !== 'updating') busyOption = undefined;
   for (const button of [shadowButton, cropButton]) button.setAttribute('aria-busy', String(button === busyOption));
   updateBrushButtons();
@@ -166,6 +227,10 @@ retryButton.addEventListener('click', () => {
 const mb = (n: number) => (n / 1e6).toFixed(0);
 
 function handleWorkerMessage(msg: FromWorker) {
+  if (msg.type === 'preview') {
+    showPreview(msg);
+    return;
+  }
   const request = editor.active;
   if (!request || request.id !== msg.id) return;
   if (msg.type === 'progress') {
@@ -198,6 +263,10 @@ function resetView() {
   showHoles([]);
   bounds = undefined;
   showCrop();
+  shadowFound = undefined;
+  shadowTemperature = undefined;
+  showShadowControls();
+  endPreview();
   dims.textContent = '';
   fileInput.value = '';
 }
@@ -226,6 +295,8 @@ async function processImage() {
   if (!request) return;
   const file = editor.file!;
   const shadow = keepShadow;
+  const soft = shadowSoftness;
+  const temperature = shadowTemperature;
   const crop = cropped;
   renderState();
   if (!request.quiet) {
@@ -257,6 +328,7 @@ async function processImage() {
     const edit = brushEdit;
     const strokes = await brush.edits();
     edits = strokes.bitmap;
+    const fillHoles = strokes.fillHoles;
     if (!editor.isCurrent(request)) {
       bitmap?.close();
       edits?.close();
@@ -266,7 +338,8 @@ async function processImage() {
     request.strokes = strokes.count;
     if (bitmap && !request.quiet) dims.textContent = `${bitmap.width} × ${bitmap.height}`;
     const transfer = [bitmap, edits].filter((b) => !!b);
-    if (worker.send({ type: 'process', id: request.id, image: request.image, edit, bitmap, shadow, crop, edits }, transfer)) {
+    const message = { type: 'process' as const, id: request.id, image: request.image, edit, bitmap, shadow, soft, temperature, crop, fillHoles, edits };
+    if (worker.send(message, transfer)) {
       if (bitmap) workerImage = request.image;
     } else {
       bitmap?.close();
@@ -326,6 +399,9 @@ async function showResult(request: Request, msg: Extract<FromWorker, { type: 'do
     size = { w: width, h: height };
     bounds = msg.bounds;
     showCrop();
+    shadowFound = msg.shadow;
+    showShadowControls();
+    endPreview();
     brush.markApplied(request.strokes);
     showHoles(holes);
     renderState();
@@ -366,6 +442,7 @@ $('#hint-close').addEventListener('click', () => {
   hintClosed = true;
   showHoles([]);
 });
+$('#hint-fill').addEventListener('click', () => brush.fillHoles());
 $('#hint-restore').addEventListener('click', () => {
   hintUsed = true;
   hint.hidden = true;
@@ -394,11 +471,137 @@ shadowButton.addEventListener('click', () => {
   } catch {
     // Storage not available
   }
-  if (editor.file) {
-    busyOption = shadowButton;
-    applyEdits();
-  }
+  changeShadow(true);
+  updateControls();
 });
+
+// Shadow settings: colour temperature and softness. The worker reports
+// whether the image has a shadow and the measured temperature of its colour.
+// Without a shadow, the whole group is hidden. The softness is kept; the
+// temperature belongs to one image and starts at the measured colour.
+
+let shadowFound: { temperature: number } | undefined;
+let shadowTemperature: number | undefined;
+let shadowSoftness = 0;
+try {
+  shadowSoftness = Math.min(1, Math.max(0, Number(localStorage.getItem('bg-shadow-soft')) || 0));
+} catch {
+  // Storage not available
+}
+shadowSoft.value = String(Math.round(shadowSoftness * 100));
+
+function showShadowControls() {
+  shadowGroup.hidden = !shadowFound;
+  if (!shadowFound) {
+    closeDisabledPops();
+    return;
+  }
+  const original = Math.round(shadowFound.temperature * 100);
+  shadowOriginal.value = String(original);
+  // While the slider is in use, its value is the newest one; a result for an
+  // older value must not move it back.
+  if (document.activeElement !== shadowTemp) {
+    shadowTemp.value = String(shadowTemperature === undefined ? original : Math.round(shadowTemperature * 100));
+  }
+  updateControls();
+}
+
+/**
+ * A change of a setting applies to the current image. The toggle shows that
+ * it is busy; the sliders do not, because a busy sign that starts and stops
+ * with every step of a slider only flickers.
+ */
+function changeShadow(busy: boolean) {
+  if (!editor.file) return;
+  busyOption = busy ? shadowButton : undefined;
+  applyEdits();
+}
+
+// While a slider moves, the worker renders small previews without a PNG,
+// and a canvas shows them over the result. The result itself is made once,
+// when the slider is released. Until then, the edit counts as pending, so
+// that no stale PNG is exported.
+
+// Only one preview request runs at a time. A move while one runs is sent
+// when the answer arrives, with the newest values.
+let previewId = 0;
+let previewBusy = false;
+let previewAgain = false;
+let previewing = false;
+
+function requestPreview() {
+  if (!editor.file || !shadowFound || !editor.hasResult) return;
+  if (previewBusy) {
+    previewAgain = true;
+    return;
+  }
+  const dpr = window.devicePixelRatio || 1;
+  const size = Math.min(1536, Math.round(Math.max(result.clientWidth, result.clientHeight) * dpr) || 1024);
+  const message = {
+    type: 'preview' as const, id: ++previewId, image: editor.image, edit: brushEdit,
+    soft: shadowSoftness, temperature: shadowTemperature, size,
+  };
+  previewBusy = worker.send(message, []);
+}
+
+function showPreview(msg: Extract<FromWorker, { type: 'preview' }>) {
+  previewBusy = false;
+  const { bitmap } = msg;
+  // The newest preview is shown even if a newer value waits: it is closer
+  // than what is on screen. Stale is only a preview for another image, or
+  // one that arrives after the result is already shown.
+  if (bitmap && previewing && msg.image === editor.image && msg.id === previewId) {
+    if (previewCanvas.width !== bitmap.width || previewCanvas.height !== bitmap.height) {
+      previewCanvas.width = bitmap.width;
+      previewCanvas.height = bitmap.height;
+    }
+    const ctx = previewCanvas.getContext('2d')!;
+    ctx.clearRect(0, 0, bitmap.width, bitmap.height);
+    ctx.drawImage(bitmap, 0, 0);
+    previewCanvas.hidden = false;
+    frame.classList.add('previewing');
+  }
+  bitmap?.close();
+  if (previewAgain) {
+    previewAgain = false;
+    requestPreview();
+  }
+}
+
+/** The result is current again: the preview is not needed. */
+function endPreview() {
+  previewing = false;
+  previewAgain = false;
+  previewCanvas.hidden = true;
+  frame.classList.remove('previewing');
+}
+
+/** A slider moved: the current result is out of date, and a preview shows the new value. */
+function moveShadow() {
+  if (!editor.file) return;
+  previewing = true;
+  editor.edit();
+  renderState();
+  requestPreview();
+}
+
+shadowTemp.addEventListener('input', () => {
+  const value = Number(shadowTemp.value) / 100;
+  // Close to the measured colour means the measured colour.
+  shadowTemperature = shadowFound && Math.abs(value - shadowFound.temperature) < 0.03 ? undefined : value;
+  moveShadow();
+});
+shadowSoft.addEventListener('input', () => {
+  shadowSoftness = Number(shadowSoft.value) / 100;
+  try {
+    localStorage.setItem('bg-shadow-soft', String(shadowSoftness));
+  } catch {
+    // Storage not available
+  }
+  moveShadow();
+});
+// Released: make the real result.
+for (const slider of [shadowTemp, shadowSoft]) slider.addEventListener('change', () => changeShadow(false));
 
 // Crop option: shows and exports only the visible pixels. The bounds come
 // with each result, so they follow later edits, e.g. a shadow that is switched
@@ -467,19 +670,22 @@ function updateBrushButtons() {
   restoreButton.disabled = eraseButton.disabled = !ready;
   restoreButton.setAttribute('aria-pressed', String(brush.mode === 'restore'));
   eraseButton.setAttribute('aria-pressed', String(brush.mode === 'erase'));
-  brushSize.disabled = !ready || !brush.mode;
+  closeDisabledPops();
+  if (!brush.mode && !brushSizePanel.hidden) openPop(undefined);
   undoButton.disabled = !ready || !brush.canUndo;
 }
 
-function toggleBrush(mode: BrushMode | undefined) {
+/** Turns a brush on or off. A click on its button also shows the size slider. */
+function toggleBrush(mode: BrushMode | undefined, showSize = false) {
   brush.setMode(brush.mode === mode ? undefined : mode);
   updateBrushButtons();
+  if (showSize && brush.mode) openPop(brushPop);
 }
 
 updateControls();
 
-restoreButton.addEventListener('click', () => toggleBrush('restore'));
-eraseButton.addEventListener('click', () => toggleBrush('erase'));
+restoreButton.addEventListener('click', () => toggleBrush('restore', true));
+eraseButton.addEventListener('click', () => toggleBrush('erase', true));
 undoButton.addEventListener('click', () => brush.undo());
 brushSize.addEventListener('input', () => brush.setSize(Number(brushSize.value)));
 
@@ -492,6 +698,10 @@ about.addEventListener('click', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && pops.some((pop) => !pop.panel.hidden)) {
+    openPop(undefined);
+    return;
+  }
   if (!editor.hasResult) return;
   if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
     e.preventDefault();

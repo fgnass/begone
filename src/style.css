@@ -184,12 +184,6 @@ input:disabled {
   background: transparent;
 }
 
-#brush-size {
-  width: 96px;
-  margin: 0 6px;
-  accent-color: var(--accent);
-}
-
 /* Stage */
 
 #stage {
@@ -352,6 +346,20 @@ body:not(.empty) #drop {
 }
 
 .done.compare #result {
+  visibility: hidden;
+}
+
+/* While a shadow slider moves, a small preview covers the result. It takes
+   the box of the result: the frame, or the view when cropped. */
+#preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#frame.previewing #result {
   visibility: hidden;
 }
 
@@ -694,11 +702,11 @@ button.toggle[aria-pressed='true'] .switch::after {
 }
 
 /* While a change of the option is applied. Short updates do not flash. */
-button.toggle[aria-busy='true'] {
+button[aria-busy='true'] {
   cursor: progress;
 }
 
-button.toggle[aria-busy='true'] > * {
+button[aria-busy='true'] > * {
   animation: busy 0.7s ease-in-out 0.2s infinite alternate;
 }
 
@@ -713,10 +721,62 @@ button.toggle[aria-busy='true'] > * {
   .switch::after {
     transition: none;
   }
-  button.toggle[aria-busy='true'] > * {
+  button[aria-busy='true'] > * {
     animation: none;
     opacity: 0.5;
   }
+}
+
+/* Sliders (brush size, shadow colour, diffuse shadow) sit behind icon
+   buttons. Each button opens a slim vertical slider above it, like the
+   volume control of a video player, so the image stays visible. */
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pop {
+  position: relative;
+}
+
+/* The brush size panel belongs to both brush buttons; a script places it over the active one. */
+.pop.brushes {
+  display: flex;
+  gap: 4px;
+}
+
+.vslider {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px var(--shadow);
+  will-change: transform;
+}
+
+.vslider input {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 20px;
+  height: 128px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.vlabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 /* Copy feedback */
@@ -735,15 +795,15 @@ button.toggle[aria-busy='true'] > * {
 
 .hint-card {
   position: absolute;
-  flex-wrap: wrap;
   bottom: calc(100% + 4px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   width: min(600px, calc(100vw - 32px));
-  padding: 8px 8px 8px 14px;
+  padding: 10px 8px 8px 14px;
   border-radius: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -759,8 +819,25 @@ button.toggle[aria-busy='true'] > * {
   font-weight: 600;
 }
 
+/* Room for the close button at the top right. */
 .hint-card > span {
-  flex: 1 1 260px;
+  padding-right: 36px;
+}
+
+/* The actions sit in a row under the text, the main one at the right. */
+.hint-card .actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+}
+
+#hint-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
 }
 
 .hint-card button.text {
@@ -769,6 +846,11 @@ button.toggle[aria-busy='true'] > * {
   padding: 0 12px;
   color: var(--accent);
   font-weight: 600;
+}
+
+.hint-card button.secondary {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .hole-mark {

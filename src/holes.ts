@@ -1,7 +1,8 @@
 // Finds holes in the cut-out: transparent areas that the object encloses on
 // all sides. Often the model dropped a part of the object there (a bag, a
 // light shirt), but it can also be real background, e.g. between an arm and
-// the body. The app only points them out and suggests the Restore brush.
+// the body. The app points them out and offers to restore them, by hand with
+// the brush or all at once with fillHoles().
 
 /** A hole's bounding box, as fractions of the image size. */
 export type Hole = { x: number; y: number; w: number; h: number };
@@ -9,11 +10,13 @@ export type Hole = { x: number; y: number; w: number; h: number };
 const GRID = 256; // cells on the long side
 const MAX_HOLES = 5;
 
+type Component = { mark: number; size: number; minX: number; minY: number; maxX: number; maxY: number };
+
 /**
- * `alpha` is the object alpha (0..1). Pixels with `erase` > 0.5 were erased
- * on purpose and do not count as holes.
+ * Finds the enclosed areas on a coarse grid. Returns the grid, with the cells
+ * of each hole marked with the hole's `mark`, and the holes by size.
  */
-export function findHoles(alpha: Float32Array, erase: Float32Array | undefined, w: number, h: number): Hole[] {
+function analyse(alpha: Float32Array, erase: Float32Array | undefined, w: number, h: number) {
   const step = Math.max(1, Math.ceil(Math.max(w, h) / GRID));
   const gw = Math.ceil(w / step);
   const gh = Math.ceil(h / step);
@@ -33,7 +36,8 @@ export function findHoles(alpha: Float32Array, erase: Float32Array | undefined, 
       if (alpha[i] >= 0.5) objectCells++;
     }
   }
-  if (!objectCells) return [];
+  const none = { step, gw, gh, cells, holes: [] as Component[] };
+  if (!objectCells) return none;
 
   const queue = new Int32Array(n);
 
@@ -93,21 +97,89 @@ export function findHoles(alpha: Float32Array, erase: Float32Array | undefined, 
   const maxSize = objectCells * 0.25;
   // Measured: gaps in hair ~0.05–0.15, a hole in a solid object ~0.8.
   const minSolidRim = 0.6;
-  const holes: (Hole & { size: number })[] = [];
+  const holes: Component[] = [];
+  let mark = 3;
   for (let i = 0; i < n; i++) {
     if (cells[i] !== 1) continue;
-    const r = fill(i, 3);
+    const r = fill(i, mark);
     if (r.size < minSize || r.size > maxSize || r.solidRim < minSolidRim) continue;
-    holes.push({
-      size: r.size,
-      x: (r.minX * step) / w,
-      y: (r.minY * step) / h,
-      w: Math.min(1, ((r.maxX + 1) * step) / w) - (r.minX * step) / w,
-      h: Math.min(1, ((r.maxY + 1) * step) / h) - (r.minY * step) / h,
-    });
+    holes.push({ mark, ...r });
+    // Marks are bytes; more enclosed areas than that are specks anyway.
+    if (mark < 255) mark++;
   }
-  return holes
-    .sort((a, b) => b.size - a.size)
-    .slice(0, MAX_HOLES)
-    .map(({ x, y, w, h }) => ({ x, y, w, h }));
+  return { ...none, holes: holes.sort((a, b) => b.size - a.size).slice(0, MAX_HOLES) };
+}
+
+/**
+ * `alpha` is the object alpha (0..1). Pixels with `erase` > 0.5 were erased
+ * on purpose and do not count as holes.
+ */
+export function findHoles(alpha: Float32Array, erase: Float32Array | undefined, w: number, h: number): Hole[] {
+  const { step, holes } = analyse(alpha, erase, w, h);
+  return holes.map((r) => ({
+    x: (r.minX * step) / w,
+    y: (r.minY * step) / h,
+    w: Math.min(1, ((r.maxX + 1) * step) / w) - (r.minX * step) / w,
+    h: Math.min(1, ((r.maxY + 1) * step) / h) - (r.minY * step) / h,
+  }));
+}
+
+/**
+ * Makes the holes that findHoles() would report part of the object, in
+ * place. The fill is exact to the pixel: it floods the transparent pixels
+ * from the hole's cells, inside the hole's box with one cell of margin, and
+ * then grows by one pixel so that the soft rim of the hole closes too.
+ * Returns the number of holes filled.
+ */
+export function fillHoles(alpha: Float32Array, erase: Float32Array | undefined, w: number, h: number) {
+  const { step, gw, cells, holes } = analyse(alpha, erase, w, h);
+  const empty = (i: number) => alpha[i] < 0.5 && !(erase && erase[i] > 0.5);
+  for (const hole of holes) {
+    const x0 = Math.max(0, (hole.minX - 1) * step);
+    const y0 = Math.max(0, (hole.minY - 1) * step);
+    const x1 = Math.min(w, (hole.maxX + 2) * step);
+    const y1 = Math.min(h, (hole.maxY + 2) * step);
+    const bw = x1 - x0;
+    const bh = y1 - y0;
+    const filled = new Uint8Array(bw * bh);
+    const queue = new Int32Array(bw * bh);
+    let tail = 0;
+    const push = (x: number, y: number) => {
+      const j = (y - y0) * bw + (x - x0);
+      if (filled[j] || !empty(y * w + x)) return;
+      filled[j] = 1;
+      queue[tail++] = j;
+    };
+    // Seeds: every transparent pixel in the hole's cells.
+    for (let gy = hole.minY; gy <= hole.maxY; gy++) {
+      for (let gx = hole.minX; gx <= hole.maxX; gx++) {
+        if (cells[gy * gw + gx] !== hole.mark) continue;
+        for (let y = gy * step; y < Math.min(h, (gy + 1) * step); y++) {
+          for (let x = gx * step; x < Math.min(w, (gx + 1) * step); x++) push(x, y);
+        }
+      }
+    }
+    for (let head = 0; head < tail; head++) {
+      const j = queue[head];
+      const x = x0 + (j % bw);
+      const y = y0 + (j - (j % bw)) / bw;
+      if (x > x0) push(x - 1, y);
+      if (x < x1 - 1) push(x + 1, y);
+      if (y > y0) push(x, y - 1);
+      if (y < y1 - 1) push(x, y + 1);
+    }
+    for (let head = 0; head < tail; head++) {
+      const j = queue[head];
+      const x = x0 + (j % bw);
+      const y = y0 + (j - (j % bw)) / bw;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if (xx >= 0 && xx < w && yy >= 0 && yy < h) alpha[yy * w + xx] = 1;
+        }
+      }
+    }
+  }
+  return holes.length;
 }

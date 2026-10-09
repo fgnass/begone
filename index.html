@@ -85,6 +85,7 @@
               <div id="view">
                 <img id="original" alt="Original image" />
                 <img id="result" alt="Image without background" hidden />
+                <canvas id="preview" aria-hidden="true" hidden></canvas>
               </div>
             </div>
             <canvas id="sizer" aria-hidden="true"></canvas>
@@ -110,30 +111,63 @@
         <div id="hint" class="hint-card" role="status" hidden>
           <span>
             <strong>Is something missing?</strong>
-            The marked area is see-through. If it belongs to the object, paint over it with the Restore brush to bring it back.
+            The marked area is see-through. If it belongs to the object, bring it back in one go, or paint over parts of it with the Restore brush.
           </span>
-          <button id="hint-restore" class="text">Use Restore brush</button>
+          <div class="actions">
+            <button id="hint-restore" class="text secondary">Use brush</button>
+            <button id="hint-fill" class="text">Restore marked areas</button>
+          </div>
           <button id="hint-close" class="icon" aria-label="Close hint" title="Close">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
           </button>
         </div>
         <div class="toolbar panel" role="toolbar" aria-label="Edit">
-          <button id="restore" class="icon" aria-pressed="false" disabled aria-label="Restore brush" title="Restore brush (B)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 10 3 3" /><path d="M6.5 21A3.5 3.5 0 1 0 3 17.5a2.62 2.62 0 0 1-.708 1.792A1 1 0 0 0 3 21z" /><path d="M9.969 17.031 21.378 5.624a1 1 0 0 0-3.002-3.002L6.967 14.031" /></svg>
-          </button>
-          <button id="erase" class="icon" aria-pressed="false" disabled aria-label="Erase brush" title="Erase brush (E)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21" /><path d="m5.082 11.09 8.828 8.828" /></svg>
-          </button>
-          <input id="brush-size" type="range" min="4" max="300" value="40" aria-label="Brush size" title="Brush size ([ and ])" disabled />
+          <div class="pop brushes">
+            <button id="restore" class="icon" aria-pressed="false" disabled aria-label="Restore brush" title="Restore brush (B)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 10 3 3" /><path d="M6.5 21A3.5 3.5 0 1 0 3 17.5a2.62 2.62 0 0 1-.708 1.792A1 1 0 0 0 3 21z" /><path d="M9.969 17.031 21.378 5.624a1 1 0 0 0-3.002-3.002L6.967 14.031" /></svg>
+            </button>
+            <button id="erase" class="icon" aria-pressed="false" disabled aria-label="Erase brush" title="Erase brush (E)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21" /><path d="m5.082 11.09 8.828 8.828" /></svg>
+            </button>
+            <div id="brush-size-panel" class="vslider" role="group" aria-label="Brush size" hidden>
+              <span class="vlabel">Large</span>
+              <input id="brush-size" type="range" min="4" max="300" value="40" aria-label="Brush size" title="Brush size ([ and ])" />
+              <span class="vlabel">Small</span>
+            </div>
+          </div>
           <button id="undo" class="icon" aria-label="Undo" title="Undo (Ctrl/⌘ Z)" disabled>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" /></svg>
           </button>
           <span class="sep"></span>
-          <button id="shadow" class="text toggle" aria-pressed="true" aria-label="Keep shadows" title="Keep shadows (plain backgrounds only)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 11.134 18.196 21" /><path d="M20.425 5.299a10 10 0 0 0-16.941 9.78c.183.563.843.774 1.355.478L20.16 6.711c.512-.296.66-.973.264-1.413" /><path d="M21 21H3" /></svg>
-            <span class="label">Shadow</span>
-            <span class="switch" aria-hidden="true"></span>
-          </button>
+          <div id="shadow-group" class="group" role="group" aria-label="Shadow" hidden>
+            <button id="shadow" class="text toggle" aria-pressed="true" aria-label="Keep the shadow" title="Keep the shadow">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 11.134 18.196 21" /><path d="M20.425 5.299a10 10 0 0 0-16.941 9.78c.183.563.843.774 1.355.478L20.16 6.711c.512-.296.66-.973.264-1.413" /><path d="M21 21H3" /></svg>
+              <span class="label">Shadow</span>
+              <span class="switch" aria-hidden="true"></span>
+            </button>
+            <div class="pop">
+              <button id="shadow-temp-button" class="icon" aria-expanded="false" aria-controls="shadow-temp-panel" aria-label="Shadow colour" title="Shadow colour: cold to warm">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9a4 4 0 0 0-2 7.5" /><path d="M12 3v2" /><path d="m6.6 18.4-1.4 1.4" /><path d="M20 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z" /><path d="M4 13H2" /><path d="M6.34 7.34 4.93 5.93" /></svg>
+              </button>
+              <div id="shadow-temp-panel" class="vslider" role="group" aria-label="Shadow colour" hidden>
+                <span class="vlabel">Warm</span>
+                <input id="shadow-temp" type="range" min="-100" max="100" value="0" list="shadow-temp-ticks" aria-label="Shadow colour, cold to warm" title="The tick is the colour of the photo" />
+                <datalist id="shadow-temp-ticks"><option id="shadow-original" value="0" label="Photo"></option></datalist>
+                <span class="vlabel">Cold</span>
+              </div>
+            </div>
+            <div class="pop">
+              <button id="shadow-soft-button" class="icon" aria-expanded="false" aria-controls="shadow-soft-panel" aria-label="Diffuse shadow" title="Diffuse shadow">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 18a6 6 0 0 0 0-12v12z" /></svg>
+              </button>
+              <div id="shadow-soft-panel" class="vslider" role="group" aria-label="Diffuse shadow" hidden>
+                <span class="vlabel">Soft</span>
+                <input id="shadow-soft" type="range" min="0" max="100" value="0" aria-label="Diffuse shadow" />
+                <span class="vlabel">Sharp</span>
+              </div>
+            </div>
+            <span class="sep"></span>
+          </div>
           <button id="crop" class="text toggle" aria-pressed="false" aria-label="Crop to content" title="Crop to content">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14" /><path d="M18 22V8a2 2 0 0 0-2-2H2" /></svg>
             <span class="label">Crop</span>
@@ -155,7 +189,7 @@
           Your images never leave your device: there is no upload, no account and no tracking. After the first visit,
           the app also works offline, and you can install it from your browser.
         </p>
-        <p>On a plain background, begone also keeps the real shadow of the object. Use the brushes to fix the result by hand.</p>
+        <p>On a plain background, begone also keeps the real shadow of the object, with its colour. You can make the shadow warmer, colder or more diffuse. Use the brushes to fix the result by hand.</p>
         <p>
           The cut-out is done by <a class="link" href="https://github.com/ZhengPeng7/BiRefNet" target="_blank" rel="noopener">BiRefNet</a>
           (MIT license), a segmentation model that runs on your GPU where possible.
