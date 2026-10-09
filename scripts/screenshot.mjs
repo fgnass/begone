@@ -20,13 +20,20 @@
  *                                   a desktop viewport, in a browser window on
  *                                   the pink of gnass.buzz/projects, 2400 × 1260
  *
+ * Not deployed, so not in public/:
+ *
+ *   promo/post.png                  the same in the 4:5 format of a LinkedIn
+ *                                   post image, with the tagline above the
+ *                                   window, 2160 × 2700
+ *
  * Demo photo: scripts/assets/banana.jpg, "riped banana on pink surface" by
  * Mike Dorner (https://unsplash.com/photos/sf_1ZDA1YFw), Unsplash License.
  *
  * Re-run any time the UI changes:  npm run screenshot
  */
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -34,6 +41,9 @@ import { chromium } from 'playwright';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const outDir = resolve(root, 'public', 'screenshots');
+const promoDir = resolve(root, 'promo');
+const require = createRequire(import.meta.url);
+const BOREL = require.resolve('@fontsource/borel/files/borel-latin-400-normal.woff2');
 const photo = resolve(__dirname, 'assets', 'banana.jpg');
 
 // Target output is 780 × 1688: half that on a high-DPI viewport, captured at
@@ -58,48 +68,68 @@ async function removeBackground(page) {
   );
 }
 
-// Link previews use 1.91:1 (1200 × 630). The browser window sits in it with a
-// margin, so the app viewport is the window minus its border and title bar.
-const OG = { width: 1200, height: 630 };
-const OG_WINDOW = { x: 60, y: 40, width: 1080, height: 534, bar: 40, border: 2 };
-const OG_CONTENT = {
-  width: OG_WINDOW.width - 2 * OG_WINDOW.border,
-  height: OG_WINDOW.height - OG_WINDOW.bar - 2 * OG_WINDOW.border,
-};
+const BAR = 40;
+const BORDER = 2;
 
 /**
- * Puts a screenshot in a stylized browser window on the accent color of
- * begone on gnass.buzz/projects, with the same frame color and hard shadow.
+ * A result shot in a stylized browser window on the accent color of begone on
+ * gnass.buzz/projects, with the same frame color and hard shadow. `canvas` is
+ * the image size in CSS pixels, `window` the place of the window in it. The
+ * app viewport is the window minus its border and title bar. An optional
+ * `title` is written in Borel, centered above the window.
  */
-async function frameInBrowser(browser, png) {
-  const w = OG_WINDOW;
+function framedShot(canvas, window, { title, dir = outDir } = {}) {
+  const content = {
+    width: window.width - 2 * BORDER,
+    height: window.height - BAR - 2 * BORDER,
+  };
+  return {
+    viewport: content,
+    mobile: false,
+    storage: RESULT_STORAGE,
+    stage: removeBackground,
+    dir,
+    compose: (browser, png) => frameInBrowser(browser, png, canvas, window, content, title),
+  };
+}
+
+async function frameInBrowser(browser, png, canvas, w, content, title) {
+  const font = title ? (await readFile(BOREL)).toString('base64') : '';
   const html = `<!doctype html>
 <style>
+  @font-face { font-family: Borel; src: url(data:font/woff2;base64,${font}) format('woff2'); }
+  h1 {
+    position: absolute; left: 0; right: 0; top: 0; height: ${w.y}px;
+    display: flex; align-items: center; justify-content: center;
+    font: 400 84px/1 Borel; color: #3d0722; padding-top: 0.5em;
+  }
   * { box-sizing: border-box; margin: 0; }
-  body { width: ${OG.width}px; height: ${OG.height}px; background: #ff3ea5; overflow: hidden; }
+  body { width: ${canvas.width}px; height: ${canvas.height}px; background: #ff3ea5; overflow: hidden; }
   .window {
     position: absolute; left: ${w.x}px; top: ${w.y}px; width: ${w.width}px; height: ${w.height}px;
-    border: ${w.border}px solid #3d0722; border-radius: 16px; overflow: hidden;
+    border: ${BORDER}px solid #3d0722; border-radius: 16px; overflow: hidden;
     background: #3d0722; box-shadow: 0 10px #00000038;
   }
-  .bar { position: relative; height: ${w.bar}px; display: flex; align-items: center; padding-left: 16px; gap: 8px; }
+  .bar { position: relative; height: ${BAR}px; display: flex; align-items: center; padding-left: 16px; gap: 8px; }
   .dot { width: 12px; height: 12px; border-radius: 50%; background: #ff3ea5; opacity: 0.6; }
   .url {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
     width: 360px; height: 26px; border-radius: 13px; background: #ffffff1a;
     color: #ffd3ea; font: 500 13px/26px system-ui, sans-serif; text-align: center; letter-spacing: 0.02em;
   }
-  img { display: block; width: ${OG_CONTENT.width}px; height: ${OG_CONTENT.height}px; }
+  img { display: block; width: ${content.width}px; height: ${content.height}px; }
 </style>
+${title ? `<h1>${title}</h1>` : ''}
 <div class="window">
   <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">bg.gnass.buzz</span></div>
   <img src="data:image/png;base64,${png.toString('base64')}" />
 </div>`;
-  const context = await browser.newContext({ viewport: OG, deviceScaleFactor: SCALE });
+  const context = await browser.newContext({ viewport: canvas, deviceScaleFactor: SCALE });
   try {
     const page = await context.newPage();
     await page.setContent(html, { waitUntil: 'load' });
-    return { png: await page.screenshot(), size: { width: OG.width * SCALE, height: OG.height * SCALE } };
+    await page.evaluate(() => document.fonts.ready);
+    return { png: await page.screenshot(), size: { width: canvas.width * SCALE, height: canvas.height * SCALE } };
   } finally {
     await context.close();
   }
@@ -124,15 +154,14 @@ const SHOTS = {
     storage: { 'bg-theme': 'light' },
     async stage() {},
   },
-  // Link preview for LinkedIn, Slack etc. The app fills the content area of
-  // the browser window that frameInBrowser() draws.
-  og: {
-    viewport: OG_CONTENT,
-    mobile: false,
-    storage: RESULT_STORAGE,
-    stage: removeBackground,
-    compose: frameInBrowser,
-  },
+  // Link preview for LinkedIn, Slack etc., which use 1.91:1.
+  og: framedShot({ width: 1200, height: 630 }, { x: 60, y: 40, width: 1080, height: 534 }),
+  // Image for a LinkedIn post: 4:5 gets the most room in the feed.
+  post: framedShot(
+    { width: 1080, height: 1350 },
+    { x: 60, y: 250, width: 960, height: 1030 },
+    { title: 'background begone!', dir: promoDir },
+  ),
 };
 
 function startServer() {
@@ -180,7 +209,7 @@ async function capture(browser, name, shot) {
     let png = await page.screenshot();
     let size = { width: viewport.width * scale, height: viewport.height * scale };
     if (shot.compose) ({ png, size } = await shot.compose(browser, png));
-    const out = resolve(outDir, `${name}.png`);
+    const out = resolve(shot.dir ?? outDir, `${name}.png`);
     await writeFile(out, png);
     console.log(`Saved ${out} (${size.width} × ${size.height})`);
   } finally {
@@ -190,6 +219,7 @@ async function capture(browser, name, shot) {
 
 async function main() {
   await mkdir(outDir, { recursive: true });
+  await mkdir(promoDir, { recursive: true });
 
   console.log('Starting Vite…');
   const server = await startServer();
